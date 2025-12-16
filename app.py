@@ -2,8 +2,6 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import torch
 import numpy as np
-import sys
-import subprocess
 
 # Konfigurasi halaman
 st.set_page_config(
@@ -12,25 +10,14 @@ st.set_page_config(
     layout="wide"
 )
 
-# Install ultralytics jika belum ada
-@st.cache_resource
-def install_dependencies():
-    try:
-        import ultralytics
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "ultralytics"])
-
-# Fungsi untuk load model
+# Fungsi untuk load model YOLOv5
 @st.cache_resource
 def load_model():
     try:
-        # Install dependencies
-        install_dependencies()
-        
-        from ultralytics import YOLO
-        
-        # Load model langsung dari best.pt
-        model = YOLO('best.pt')
+        # Load YOLOv5 dari torch.hub (GitHub ultralytics/yolov5)
+        # source='github' akan otomatis download repo YOLOv5
+        model = torch.hub.load('ultralytics/yolov5', 'custom', path='best.pt', force_reload=False)
+        model.conf = 0.5  # Default confidence
         
         st.success("✅ Model YOLOv5 berhasil dimuat!")
         return model
@@ -43,7 +30,7 @@ def load_model():
         return None
 
 # Fungsi untuk draw bounding boxes
-def draw_boxes(image, results):
+def draw_boxes(image, detections):
     """Draw bounding boxes on image using PIL"""
     img = image.copy()
     draw = ImageDraw.Draw(img)
@@ -51,36 +38,17 @@ def draw_boxes(image, results):
     # Colors for different classes
     colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'cyan', 'magenta']
     
-    # Get boxes from results
-    boxes = results[0].boxes
+    if len(detections) == 0:
+        return img
     
-    if len(boxes) == 0:
-        return img, []
-    
-    detections = []
-    
-    for idx, box in enumerate(boxes):
+    for idx, det in detections.iterrows():
         # Get coordinates
-        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        x1, y1, x2, y2 = int(det['xmin']), int(det['ymin']), int(det['xmax']), int(det['ymax'])
+        confidence = det['confidence']
+        class_name = det['name']
         
-        # Get confidence and class
-        confidence = float(box.conf[0])
-        class_id = int(box.cls[0])
-        class_name = results[0].names[class_id]
-        
-        # Store detection info
-        detections.append({
-            'name': class_name,
-            'confidence': confidence,
-            'xmin': x1,
-            'ymin': y1,
-            'xmax': x2,
-            'ymax': y2
-        })
-        
-        # Choose color
-        color = colors[class_id % len(colors)]
+        # Choose color based on class
+        color = colors[idx % len(colors)]
         
         # Draw rectangle
         draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
@@ -105,18 +73,21 @@ def draw_boxes(image, results):
         # Draw text
         draw.text((x1+2, y1-text_height-3), text, fill='white', font=font)
     
-    return img, detections
+    return img
 
 # Fungsi untuk deteksi
-def detect_money(image, model, confidence_threshold):
+def detect_money(image, model):
     # Convert PIL to numpy array
     img_array = np.array(image)
     
     # Run detection
-    results = model.predict(img_array, conf=confidence_threshold, verbose=False)
+    results = model(img_array)
+    
+    # Get detections as pandas dataframe
+    detections = results.pandas().xyxy[0]
     
     # Draw boxes
-    result_img, detections = draw_boxes(image, results)
+    result_img = draw_boxes(image, detections)
     
     return result_img, detections
 
@@ -126,7 +97,7 @@ st.markdown("**Aplikasi berbasis YOLOv5 untuk mendeteksi keaslian uang kertas**"
 st.markdown("---")
 
 # Load model
-with st.spinner("⏳ Loading model YOLOv5... (first time might take a while)"):
+with st.spinner("⏳ Loading model YOLOv5... (first time might take 1-2 minutes)"):
     model = load_model()
 
 if model is None:
@@ -135,6 +106,7 @@ if model is None:
 # Sidebar untuk pengaturan
 st.sidebar.header("⚙️ Pengaturan")
 confidence = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
+model.conf = confidence
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📖 Cara Penggunaan")
@@ -178,7 +150,7 @@ with tab1:
             with st.spinner("🔄 Sedang mendeteksi..."):
                 try:
                     # Proses deteksi
-                    result_img, detections = detect_money(image, model, confidence)
+                    result_img, detections = detect_money(image, model)
                     
                     with col2:
                         st.markdown("#### ✅ Hasil Deteksi")
@@ -192,7 +164,7 @@ with tab1:
                         st.success(f"🎯 Terdeteksi **{len(detections)}** objek")
                         
                         # Tampilkan setiap deteksi
-                        for idx, det in enumerate(detections):
+                        for idx, det in detections.iterrows():
                             with st.expander(f"🔍 Deteksi #{idx+1}: {det['name']}", expanded=True):
                                 col_a, col_b, col_c = st.columns([2, 2, 1])
                                 
@@ -210,7 +182,7 @@ with tab1:
                                         st.error("❌ Rendah")
                                 
                                 # Koordinat
-                                st.caption(f"📍 Koordinat: ({det['xmin']}, {det['ymin']}) → ({det['xmax']}, {det['ymax']})")
+                                st.caption(f"📍 Koordinat: ({int(det['xmin'])}, {int(det['ymin'])}) → ({int(det['xmax'])}, {int(det['ymax'])})")
                         
                     else:
                         st.warning("⚠️ Tidak ada objek yang terdeteksi.")
@@ -244,7 +216,7 @@ with tab2:
             with st.spinner("🔄 Sedang mendeteksi..."):
                 try:
                     # Proses deteksi
-                    result_img, detections = detect_money(image, model, confidence)
+                    result_img, detections = detect_money(image, model)
                     
                     with col2:
                         st.markdown("#### ✅ Hasil Deteksi")
@@ -258,7 +230,7 @@ with tab2:
                         st.success(f"🎯 Terdeteksi **{len(detections)}** objek")
                         
                         # Tampilkan setiap deteksi
-                        for idx, det in enumerate(detections):
+                        for idx, det in detections.iterrows():
                             with st.expander(f"🔍 Deteksi #{idx+1}: {det['name']}", expanded=True):
                                 col_a, col_b, col_c = st.columns([2, 2, 1])
                                 
@@ -275,7 +247,7 @@ with tab2:
                                     else:
                                         st.error("❌ Rendah")
                                 
-                                st.caption(f"📍 Koordinat: ({det['xmin']}, {det['ymin']}) → ({det['xmax']}, {det['ymax']})")
+                                st.caption(f"📍 Koordinat: ({int(det['xmin'])}, {int(det['ymin'])}) → ({int(det['xmax'])}, {int(det['ymax'])})")
                     else:
                         st.warning("⚠️ Tidak ada objek yang terdeteksi.")
                         st.info("💡 Coba ambil foto ulang dengan pencahayaan lebih baik")
@@ -287,7 +259,7 @@ with tab2:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center'>
-    <p>Dibuat dengan ❤️ menggunakan YOLOv5 (Ultralytics) dan Streamlit</p>
+    <p>Dibuat dengan ❤️ menggunakan YOLOv5 dan Streamlit</p>
     <p><small>🔐 Data aman - Semua proses dilakukan di server</small></p>
 </div>
 """, unsafe_allow_html=True)

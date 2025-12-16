@@ -1,8 +1,17 @@
 import streamlit as st
 from PIL import Image
 import torch
-import cv2
 import numpy as np
+
+# Try import cv2 with error handling
+try:
+    import cv2
+except ImportError:
+    st.error("OpenCV not installed. Installing opencv-python-headless...")
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "opencv-python-headless"])
+    import cv2
 
 # Konfigurasi halaman
 st.set_page_config(

@@ -1,12 +1,6 @@
 streamlit
 torch
 torchvision
-opencv-python-headless
 opencv-python
 pillow
 pandas
-requests
-PyYAML
-tqdm
-seaborn
-matplotlib
